@@ -1,0 +1,34 @@
+# Pricing table (USD per 1M tokens)
+# To override: pass --pricing-file /path/to/your.yml to any command
+defaults:
+  input: 3.0
+  output: 15.0
+  cache_write_5m: 3.75
+  cache_write_1h: 6.0
+  cache_read: 0.30
+
+models:
+  claude-sonnet-4-6:
+    input: 3.0
+    output: 15.0
+    cache_write_5m: 3.75
+    cache_write_1h: 6.0
+    cache_read: 0.30
+  claude-opus-4-6:
+    input: 15.0
+    output: 75.0
+    cache_write_5m: 18.75
+    cache_write_1h: 30.0
+    cache_read: 1.50
+  claude-opus-4-7:
+    input: 15.0
+    output: 75.0
+    cache_write_5m: 18.75
+    cache_write_1h: 30.0
+    cache_read: 1.50
+  claude-haiku-4-5:
+    input: 0.8
+    output: 4.0
+    cache_write_5m: 1.0
+    cache_write_1h: 1.6
+    cache_read: 0.08
