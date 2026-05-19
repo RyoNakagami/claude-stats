@@ -1,0 +1,23 @@
+[project]
+name = "claude-stats"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "RyoNak", email = "nakagamiryo0901@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "typer[all]>=0.12",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+claude-stats = "claude_stats:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["uv_build>=0.11.3,<0.12.0"]
+build-backend = "uv_build"
