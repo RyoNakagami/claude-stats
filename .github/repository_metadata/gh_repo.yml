@@ -6,7 +6,7 @@ meta-data:
     - uv
     - Python
     - CLI
-    - claude code
+    - claude-code
   description: |
     A command-line interface (CLI) tool for tracking and analyzing usage statistics of the Claude AI assistant.
   homepage: null

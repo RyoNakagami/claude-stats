@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from importlib.resources import files
@@ -557,3 +558,128 @@ def prompt(
 
     console.print(tbl)
     console.print("[dim]CR=Cache Read  CW=Cache Write[/dim]\n")
+
+
+# ---------------------------------------------------------------------------
+# show command helpers
+# ---------------------------------------------------------------------------
+
+# paired tags with content, then any leftover lone tags
+_PAIRED_TAG_RE = re.compile(r"<[a-zA-Z_][a-zA-Z0-9_-]*(?:\s[^>]*)?>.*?</[a-zA-Z_][a-zA-Z0-9_-]*>", re.DOTALL)
+_LONE_TAG_RE   = re.compile(r"</?[a-zA-Z_][a-zA-Z0-9_-]*(?:\s[^>]*)?>")
+
+
+def _human_text(record: dict) -> str:
+    """Return cleaned human-readable text from a user record, or empty string."""
+    content = record.get("message", {}).get("content", [])
+    parts = []
+    for c in content:
+        if not isinstance(c, dict) or c.get("type") != "text":
+            continue
+        t = _PAIRED_TAG_RE.sub("", c["text"])
+        t = _LONE_TAG_RE.sub("", t).strip()
+        if t and "[Request interrupted" not in t:
+            parts.append(t)
+    return "\n".join(parts)
+
+
+@app.command()
+def show(
+    session_prefix: str         = typer.Argument(...,  help="セッションID (前方8文字以上)"),
+    dir:            Optional[str] = typer.Option(None, "--dir",          help="~/.claude/projects パス"),
+    pricing_file:   Optional[str] = typer.Option(None, "--pricing-file", help="pricing YAML ファイルパス"),
+):
+    """セッションの詳細をJSON形式で表示"""
+    pricing = load_pricing(pricing_file)
+    projects_dir = get_projects_dir(dir)
+
+    matched = [
+        (project_dir.name, jsonl_path)
+        for project_dir in sorted(projects_dir.iterdir())
+        if project_dir.is_dir()
+        for jsonl_path in project_dir.rglob("*.jsonl")
+        if jsonl_path.stem.startswith(session_prefix)
+    ]
+
+    if not matched:
+        console.print(f"[red]セッションが見つかりません: {session_prefix}[/red]", err=True)
+        raise typer.Exit(1)
+    if len(matched) > 1:
+        console.print("[red]複数のセッションが一致しました。より長いプレフィックスを指定してください:[/red]", err=True)
+        for _, p in matched:
+            console.print(f"  {p.stem}", err=True)
+        raise typer.Exit(1)
+
+    proj_name, jsonl_path = matched[0]
+    session_id = jsonl_path.stem
+    records = parse_jsonl(jsonl_path)
+
+    human_turns = sorted(
+        [r for r in records if r.get("type") == "user" and _human_text(r)],
+        key=lambda r: r.get("timestamp", ""),
+    )
+    assistants = sorted(
+        [r for r in records if r.get("type") == "assistant" and r.get("message", {}).get("usage")],
+        key=lambda r: r.get("timestamp", ""),
+    )
+
+    default_model = assistants[0]["message"].get("model", "unknown") if assistants else "unknown"
+
+    def _turn_cost(asst_list: list) -> tuple[float, float]:
+        cost = savings = 0.0
+        for a in asst_list:
+            m = a["message"].get("model", default_model)
+            cost    += calc_cost(a["message"]["usage"], m, pricing)
+            savings += cache_savings(a["message"]["usage"], m, pricing)
+        return cost, savings
+
+    def _aggregate_usage(asst_list: list) -> dict:
+        agg: dict = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        for a in asst_list:
+            u = a["message"]["usage"]
+            agg["input_tokens"]              += u.get("input_tokens", 0)
+            agg["output_tokens"]             += u.get("output_tokens", 0)
+            agg["cache_read_input_tokens"]   += u.get("cache_read_input_tokens", 0)
+            cc = u.get("cache_creation", {})
+            agg["cache_creation_input_tokens"] += (
+                cc.get("ephemeral_5m_input_tokens", 0)
+                + cc.get("ephemeral_1h_input_tokens", 0)
+                + u.get("cache_creation_input_tokens", 0)
+            )
+        return agg
+
+    turns_out = []
+    for i, ht in enumerate(human_turns):
+        cur_ts  = ht.get("timestamp", "")
+        next_ts = human_turns[i + 1].get("timestamp", "") if i + 1 < len(human_turns) else None
+        bucket  = [
+            a for a in assistants
+            if a.get("timestamp", "") >= cur_ts
+            and (next_ts is None or a.get("timestamp", "") < next_ts)
+        ]
+        cost, savings = _turn_cost(bucket)
+        turns_out.append({
+            "turn":                i + 1,
+            "timestamp":           cur_ts,
+            "prompt":              _human_text(ht),
+            "cost_usd":            round(cost, 6),
+            "savings_usd":         round(savings, 6),
+            "assistant_responses": len(bucket),
+            "usage":               _aggregate_usage(bucket),
+        })
+
+    total_cost, total_savings = _turn_cost(assistants)
+    ts_list = [r.get("timestamp", "") for r in records if r.get("timestamp")]
+
+    output = {
+        "session_id":        session_id,
+        "project":           proj_name,
+        "model":             default_model,
+        "period":            {"start": min(ts_list) if ts_list else None, "end": max(ts_list) if ts_list else None},
+        "total_cost_usd":    round(total_cost, 6),
+        "total_savings_usd": round(total_savings, 6),
+        "human_turns":       len(human_turns),
+        "assistant_responses": len(assistants),
+        "turns":             turns_out,
+    }
+    typer.echo(json.dumps(output, ensure_ascii=False, indent=2))

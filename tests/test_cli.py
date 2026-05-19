@@ -6,8 +6,11 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from typer.testing import CliRunner
 
 from claude_stats._cli import (
+    _human_text,
+    app,
     bar_chart,
     cache_savings,
     calc_cost,
@@ -19,6 +22,8 @@ from claude_stats._cli import (
     load_records,
 )
 from claude_stats._version import get_version
+
+runner = CliRunner()
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -298,3 +303,173 @@ def test_get_projects_dir_windows_no_appdata_fallback():
          mock.patch.dict("os.environ", env, clear=True):
         path = get_projects_dir(None)
     assert path == Path.home() / ".claude" / "projects"
+
+
+# ---------------------------------------------------------------------------
+# _human_text
+# ---------------------------------------------------------------------------
+
+def _user_record(text: str) -> dict:
+    return {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+
+
+def test_human_text_plain():
+    assert _human_text(_user_record("hello world")) == "hello world"
+
+
+def test_human_text_strips_paired_system_tag():
+    rec = _user_record("<ide_opened_file>secret path</ide_opened_file>\nreal prompt")
+    assert _human_text(rec) == "real prompt"
+
+
+def test_human_text_strips_orphaned_closing_tag():
+    rec = _user_record("before</ide_selection>\nreal prompt")
+    assert _human_text(rec) == "before\nreal prompt"
+
+
+def test_human_text_skips_tool_result_content():
+    rec = {
+        "type": "user",
+        "message": {"role": "user", "content": [{"type": "tool_result", "content": "output"}]},
+    }
+    assert _human_text(rec) == ""
+
+
+def test_human_text_filters_interrupted():
+    rec = _user_record("[Request interrupted by user]")
+    assert _human_text(rec) == ""
+
+
+def test_human_text_joins_multiple_blocks():
+    rec = {
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"},
+        ]},
+    }
+    assert _human_text(rec) == "first\nsecond"
+
+
+# ---------------------------------------------------------------------------
+# show command fixtures
+# ---------------------------------------------------------------------------
+
+SESSION_ID = "abcd1234-0000-0000-0000-000000000000"
+
+
+def _make_session_records():
+    return [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "timestamp": "2026-01-01T00:01:00Z",
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 1_000_000, "output_tokens": 0,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+        {
+            "type": "user", "uuid": "u2", "parentUuid": "a1",
+            "timestamp": "2026-01-01T00:02:00Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": "world"}]},
+        },
+        {
+            "type": "assistant", "uuid": "a2", "parentUuid": "u2",
+            "timestamp": "2026-01-01T00:03:00Z",
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 0, "output_tokens": 1_000_000,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+    ]
+
+
+@pytest.fixture()
+def show_dir(tmp_path):
+    proj = tmp_path / "test-project"
+    proj.mkdir()
+    session = proj / f"{SESSION_ID}.jsonl"
+    session.write_text("\n".join(json.dumps(r) for r in _make_session_records()) + "\n")
+    return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# show command — error cases
+# ---------------------------------------------------------------------------
+
+def test_show_not_found(show_dir):
+    result = runner.invoke(app, ["show", "ffffffff", "--dir", str(show_dir)])
+    assert result.exit_code != 0
+
+
+def test_show_ambiguous_prefix(tmp_path):
+    for name in ("abcd1111-x.jsonl", "abcd2222-x.jsonl"):
+        proj = tmp_path / "p"
+        proj.mkdir(exist_ok=True)
+        (proj / name).write_text(json.dumps(_make_session_records()[0]) + "\n")
+    result = runner.invoke(app, ["show", "abcd", "--dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# show command — happy path
+# ---------------------------------------------------------------------------
+
+def test_show_returns_valid_json(show_dir):
+    result = runner.invoke(app, ["show", SESSION_ID, "--dir", str(show_dir)])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["session_id"] == SESSION_ID
+    assert data["project"] == "test-project"
+    assert data["model"] == "claude-sonnet-4-6"
+
+
+def test_show_prefix_match(show_dir):
+    result = runner.invoke(app, ["show", "abcd1234", "--dir", str(show_dir)])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["session_id"] == SESSION_ID
+
+
+def test_show_turn_structure(show_dir):
+    result = runner.invoke(app, ["show", SESSION_ID, "--dir", str(show_dir)])
+    data = json.loads(result.output)
+    assert data["human_turns"] == 2
+    assert data["assistant_responses"] == 2
+    turns = data["turns"]
+    assert len(turns) == 2
+    assert turns[0]["prompt"] == "hello"
+    assert turns[1]["prompt"] == "world"
+
+
+def test_show_turn_costs(show_dir):
+    result = runner.invoke(app, ["show", SESSION_ID, "--dir", str(show_dir)])
+    data = json.loads(result.output)
+    turns = data["turns"]
+    # turn 1: 1M input tokens @ claude-sonnet-4-6 = $3.00
+    assert turns[0]["cost_usd"] == pytest.approx(3.0)
+    # turn 2: 1M output tokens @ claude-sonnet-4-6 = $15.00
+    assert turns[1]["cost_usd"] == pytest.approx(15.0)
+
+
+def test_show_total_cost(show_dir):
+    result = runner.invoke(app, ["show", SESSION_ID, "--dir", str(show_dir)])
+    data = json.loads(result.output)
+    assert data["total_cost_usd"] == pytest.approx(18.0)  # $3 + $15
+
+
+def test_show_period(show_dir):
+    result = runner.invoke(app, ["show", SESSION_ID, "--dir", str(show_dir)])
+    data = json.loads(result.output)
+    assert data["period"]["start"] == "2026-01-01T00:00:00Z"
+    assert data["period"]["end"] == "2026-01-01T00:03:00Z"
