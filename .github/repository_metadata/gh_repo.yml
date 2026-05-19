@@ -1,0 +1,13 @@
+meta-data:
+  repository_name: claude-stats
+  visibility: public
+  org-name: RyoNakagami
+  tag:
+    - uv
+    - Python
+    - CLI
+    - claude code
+  description: |
+    A command-line interface (CLI) tool for tracking and analyzing usage statistics of the Claude AI assistant.
+  homepage: null
+  license: mit
