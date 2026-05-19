@@ -34,6 +34,7 @@ claude-stats [コマンド] [オプション]
 | `sessions` | セッション別コスト（上位 N 件） |
 | `cache` | キャッシュ効果の詳細分析 |
 | `prompt` | プロンプト単位のコスト（上位 N 件） |
+| `show <SESSION_ID>` | セッションの詳細（ターン別プロンプト・コスト）を JSON で出力 |
 
 ### 共通オプション
 
@@ -71,7 +72,44 @@ claude-stats cache --days 7
 
 # 高コストのプロンプト上位 30 件
 claude-stats prompt --days 7
+
+# セッションの詳細を JSON で表示（セッション ID 前方一致）
+claude-stats show 289497d3
+claude-stats show 289497d3-f2a0-41f2-b993-7c7cef5b34e5
 ```
+
+### `show` コマンドの出力形式
+
+```json
+{
+  "session_id": "289497d3-f2a0-41f2-b993-7c7cef5b34e5",
+  "project": "-home-user-Desktop-myproject",
+  "model": "claude-opus-4-7",
+  "period": { "start": "2026-04-20T06:32:39.087Z", "end": "2026-04-21T01:19:12.546Z" },
+  "total_cost_usd": 224.454988,
+  "total_savings_usd": 1035.264091,
+  "human_turns": 24,
+  "assistant_responses": 585,
+  "turns": [
+    {
+      "turn": 1,
+      "timestamp": "2026-04-20T06:32:39.100Z",
+      "prompt": "run /path/to/task.md",
+      "cost_usd": 0.955804,
+      "savings_usd": 1.793335,
+      "assistant_responses": 15,
+      "usage": {
+        "input_tokens": 25,
+        "output_tokens": 6512,
+        "cache_read_input_tokens": 398519,
+        "cache_creation_input_tokens": 118724
+      }
+    }
+  ]
+}
+```
+
+セッション ID は `claude-stats sessions` の出力から確認できます．前方一致のため先頭 8 文字程度でも動作します．
 
 ## pricing.yml のカスタマイズ
 
@@ -108,7 +146,7 @@ models:
 ```
 
 - `models` に一致するモデルがない場合は `defaults` の値が使用されます．
-- モデル名は前方一致でもマッチします（例: `claude-sonnet-4-6-something` → `claude-sonnet-4-6` にマッチ）．
+- モデル名は前方一致でもマッチします（例: `claude-haiku-4-5-20251001` → `claude-haiku-4-5` にマッチ）．
 - 全コマンドで `--pricing-file` オプションが使用可能です．
 
 ## ライセンス
