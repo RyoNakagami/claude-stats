@@ -572,6 +572,8 @@ _LONE_TAG_RE   = re.compile(r"</?[a-zA-Z_][a-zA-Z0-9_-]*(?:\s[^>]*)?>")
 def _human_text(record: dict) -> str:
     """Return cleaned human-readable text from a user record, or empty string."""
     content = record.get("message", {}).get("content", [])
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
     parts = []
     for c in content:
         if not isinstance(c, dict) or c.get("type") != "text":
