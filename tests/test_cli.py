@@ -351,6 +351,34 @@ def test_human_text_joins_multiple_blocks():
     assert _human_text(rec) == "first\nsecond"
 
 
+def _user_record_str(text: str) -> dict:
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def test_human_text_string_content_plain():
+    assert _human_text(_user_record_str("実装してください")) == "実装してください"
+
+
+def test_human_text_string_content_with_code():
+    text = "#!/bin/bash\necho hi\n実装してください"
+    assert _human_text(_user_record_str(text)) == text
+
+
+def test_human_text_string_local_command_caveat():
+    rec = _user_record_str("<local-command-caveat>ignored</local-command-caveat>")
+    assert _human_text(rec) == ""
+
+
+def test_human_text_string_command_name():
+    rec = _user_record_str("<command-name>/model</command-name>\n<command-message>x</command-message>")
+    assert _human_text(rec) == ""
+
+
+def test_human_text_string_local_command_stdout():
+    rec = _user_record_str("<local-command-stdout>output</local-command-stdout>")
+    assert _human_text(rec) == ""
+
+
 # ---------------------------------------------------------------------------
 # show command fixtures
 # ---------------------------------------------------------------------------
@@ -473,3 +501,35 @@ def test_show_period(show_dir):
     data = json.loads(result.output)
     assert data["period"]["start"] == "2026-01-01T00:00:00Z"
     assert data["period"]["end"] == "2026-01-01T00:03:00Z"
+
+
+def test_show_string_content_counts_as_human_turn(tmp_path):
+    session_id = "str00001-0000-0000-0000-000000000000"
+    prompt = "#!/bin/bash\necho hi\nを踏まえて実装してください"
+    records = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": prompt},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "timestamp": "2026-01-01T00:01:00Z",
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 1_000_000, "output_tokens": 0,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+    ]
+    proj = tmp_path / "test-project"
+    proj.mkdir()
+    (proj / f"{session_id}.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    result = runner.invoke(app, ["show", session_id, "--dir", str(tmp_path)])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["human_turns"] >= 1
+    assert any(t["prompt"] == prompt for t in data["turns"])
