@@ -1,12 +1,13 @@
 ---
 author: "RyoNak"
 date-modified: "2026-05-20"
+version: "0.2.1"
 project: claude-stats
 ---
 
 # テストスイート詳細
 
-`tests/test_cli.py` に定義された 30 件のテストケースを説明します．
+`tests/test_cli.py` に定義された 50 件のテストケースを説明します．
 
 ## テスト実行方法
 
@@ -34,6 +35,8 @@ uv run pytest -k "load_pricing"
 | `load_records` | 4 | `load_records()` |
 | `get_version` | 1 | `get_version()` |
 | `get_projects_dir` | 5 | `get_projects_dir()` |
+| `_human_text` | 11 | `_human_text()` |
+| `show` | 9 | `show` コマンド（CLI） |
 
 ---
 
@@ -375,3 +378,224 @@ cache_write_5m 単価 3.75 USD/1M．
 **前提条件**: `platform.system` を `"Windows"` にモック，`APPDATA` を環境変数から除去．
 
 **期待値**: `Path.home() / ".claude" / "projects"`．
+
+---
+
+## _human_text
+
+### `test_human_text_plain`
+
+**目的**: リスト形式のコンテンツからプレーンテキストを正しく返すこと．
+
+**前提条件**: `content: [{"type": "text", "text": "hello world"}]` の user レコード．
+
+**期待値**: `"hello world"`．
+
+---
+
+### `test_human_text_strips_paired_system_tag`
+
+**目的**: `<tag>内容</tag>` 形式の paired タグが除去されること．
+
+**前提条件**: `content` に
+`<ide_opened_file>secret path</ide_opened_file>\nreal prompt` を含む user レコード．
+
+**期待値**: `"real prompt"`（タグとその内容が消え，後続のテキストのみ残る）．
+
+---
+
+### `test_human_text_strips_orphaned_closing_tag`
+
+**目的**: 対応する開きタグがない孤立した閉じタグが除去されること．
+
+**前提条件**: `"before</ide_selection>\nreal prompt"` を含む user レコード．
+
+**期待値**: `"before\nreal prompt"`（タグのみ消え，前後のテキストは保持）．
+
+---
+
+### `test_human_text_skips_tool_result_content`
+
+**目的**: `type: "tool_result"` のコンテンツブロックが無視されること．
+
+**前提条件**: `content: [{"type": "tool_result", "content": "output"}]` の user レコード．
+
+**期待値**: `""`（テキストブロック以外は対象外）．
+
+---
+
+### `test_human_text_filters_interrupted`
+
+**目的**: `[Request interrupted by user]` を含むメッセージが除外されること．
+
+**前提条件**: `"[Request interrupted by user]"` のみを含む user レコード．
+
+**期待値**: `""`．
+
+---
+
+### `test_human_text_joins_multiple_blocks`
+
+**目的**: 複数の text ブロックが改行区切りで結合されること．
+
+**前提条件**: `content: [{"type":"text","text":"first"}, {"type":"text","text":"second"}]`．
+
+**期待値**: `"first\nsecond"`．
+
+---
+
+### `test_human_text_string_content_plain`
+
+**目的**: `content` が文字列の場合にその文字列をそのまま返すこと．
+
+**前提条件**: `content: "実装してください"` の user レコード．
+
+**期待値**: `"実装してください"`．
+
+---
+
+### `test_human_text_string_content_with_code`
+
+**目的**: `content` が文字列かつコードを含む場合に内容が保持されること．
+
+**前提条件**: `content: "#!/bin/bash\necho hi\n実装してください"` の user レコード．
+
+**期待値**: 入力文字列がそのまま返る．
+
+---
+
+### `test_human_text_string_local_command_caveat`
+
+**目的**: `<local-command-caveat>` タグを含む文字列コンテンツが除去されること．
+
+**前提条件**: `content` が
+`"<local-command-caveat>ignored</local-command-caveat>"` の user レコード．
+
+**期待値**: `""`．
+
+---
+
+### `test_human_text_string_command_name`
+
+**目的**: `<command-name>` と `<command-message>` タグを含む文字列コンテンツが除去されること．
+
+**前提条件**: `content` が
+`"<command-name>/model</command-name>\n<command-message>x</command-message>"`
+の user レコード．
+
+**期待値**: `""`（全コンテンツがタグとして除去される）．
+
+---
+
+### `test_human_text_string_local_command_stdout`
+
+**目的**: `<local-command-stdout>` タグを含む文字列コンテンツが除去されること．
+
+**前提条件**: `content` が
+`"<local-command-stdout>output</local-command-stdout>"` の user レコード．
+
+**期待値**: `""`．
+
+---
+
+## show コマンド
+
+### show_dir フィクスチャ
+
+#### `show_dir(tmp_path)`
+
+`tmp_path/test-project/<SESSION_ID>.jsonl` に 4 レコード
+（user→assistant→user→assistant）を生成し，`tmp_path` を返します．
+`show` 系テストで使用します．
+
+---
+
+### `test_show_not_found`
+
+**目的**: 一致するセッションがない場合に終了コード非ゼロで失敗すること．
+
+**前提条件**: `show ffffffff --dir <show_dir>` を実行．
+
+**期待値**: `result.exit_code != 0`．
+
+---
+
+### `test_show_ambiguous_prefix`
+
+**目的**: プレフィックスが複数のセッションに一致する場合にエラーで終了すること．
+
+**前提条件**: `abcd1111-x.jsonl` と `abcd2222-x.jsonl` の両方が存在する状態で `show abcd` を実行．
+
+**期待値**: `result.exit_code != 0`．
+
+---
+
+### `test_show_returns_valid_json`
+
+**目的**: 正常系でセッション情報を含む有効な JSON が返ること．
+
+**前提条件**: `show <SESSION_ID> --dir <show_dir>` を実行．
+
+**期待値**: 終了コード 0，`session_id`・`project`・`model` の各フィールドが正しい値．
+
+---
+
+### `test_show_prefix_match`
+
+**目的**: セッション ID の先頭 8 文字のプレフィックスでマッチすること．
+
+**前提条件**: `show abcd1234 --dir <show_dir>` を実行（完全な UUID の前方 8 文字）．
+
+**期待値**: 終了コード 0，`session_id` が完全な UUID と一致．
+
+---
+
+### `test_show_turn_structure`
+
+**目的**: ターン数・プロンプト文字列が正しく集計されること．
+
+**前提条件**: 2 往復（user→assistant を 2 回）のセッションを使用．
+
+**期待値**: `human_turns == 2`，`assistant_responses == 2`，
+`turns[0].prompt == "hello"`，`turns[1].prompt == "world"`．
+
+---
+
+### `test_show_turn_costs`
+
+**目的**: ターン別コストが正しく計算されること．
+
+**前提条件**: ターン 1 は 1M input トークン（Sonnet 4-6），ターン 2 は 1M output トークン．
+
+**期待値**: `turns[0].cost_usd ≈ 3.0`（$3/MTok input），
+`turns[1].cost_usd ≈ 15.0`（$15/MTok output）．
+
+---
+
+### `test_show_total_cost`
+
+**目的**: `total_cost_usd` が全ターンのコスト合計になること．
+
+**前提条件**: 上記 2 ターンのセッション．
+
+**期待値**: `total_cost_usd ≈ 18.0`（$3 + $15）．
+
+---
+
+### `test_show_period`
+
+**目的**: `period.start` と `period.end` がセッション内の最古・最新タイムスタンプと一致すること．
+
+**前提条件**: 4 レコードのタイムスタンプが `2026-01-01T00:00:00Z` 〜 `2026-01-01T00:03:00Z`．
+
+**期待値**: `period.start == "2026-01-01T00:00:00Z"`，`period.end == "2026-01-01T00:03:00Z"`．
+
+---
+
+### `test_show_string_content_counts_as_human_turn`
+
+**目的**: `content` が文字列型の user レコードもヒューマンターンとしてカウントされること．
+
+**前提条件**: `content` フィールドが文字列（コードを含む多行テキスト）の user レコード 1 件 + assistant レコード 1 件．
+
+**期待値**: `human_turns >= 1`，かつ対応するターンの `prompt` が元の文字列と一致する．
